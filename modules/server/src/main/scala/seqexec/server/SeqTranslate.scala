@@ -420,8 +420,7 @@ object SeqTranslate {
                     gmosNsCmd
           ): InstrumentSystem[F]
       case Instrument.Gnirs   =>
-        ov: SystemOverrides =>
-          Gnirs(overriddenSystems.gnirs(ov), overriddenSystems.dhs(ov)): InstrumentSystem[F]
+        ov: SystemOverrides => Gnirs(overriddenSystems.gnirs(ov)): InstrumentSystem[F]
       case Instrument.Gpi     =>
         ov: SystemOverrides => Gpi(overriddenSystems.gpi(ov)): InstrumentSystem[F]
       case Instrument.Ghost   =>
@@ -662,7 +661,10 @@ object SeqTranslate {
                                systemss.tcsKeywordReader
           )
         case Instrument.Gnirs                    =>
-          GnirsHeader.header[F](kwClient, systemss.gnirsKeywordReader, systemss.tcsKeywordReader)
+          GnirsHeader.header[F](systemss.gnirs.gdsClient,
+                                systemss.gnirsKeywordReader,
+                                systemss.tcsKeywordReader
+          )
         case Instrument.Gpi                      =>
           GpiHeader.header[F](systemss.gpi.gdsClient,
                               systemss.tcsKeywordReader,
