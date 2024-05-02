@@ -37,6 +37,7 @@ object AppTitle {
               clazz = SeqexecStyles.titleRow |+| SeqexecStyles.notInMobile |+| SeqexecStyles.header
       )(
         s"Seqexec ${p.site.shortName}",
+        <.div(^.cls := "igrins2-only", "GNIRS GDS ONLY!"),
         p.ws.ws.renderPending(_ =>
           <.div(
             SeqexecStyles.errorText,
