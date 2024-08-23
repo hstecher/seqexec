@@ -50,7 +50,9 @@ object GnirsHeader {
           buildDouble(gnirsReader.detectorBias, KeywordName.DETBIAS)
         )
       )
-      ks.flatMap(gdsClient.openObservation(obsId, id, _))
+//      ks.flatMap(gdsClient.openObservation(obsId, id, _))
+      ks.flatMap(gdsClient.setKeywords(id, _))
+
     }
 
     override def sendAfter(obsId: ImageFileId): F[Unit] = {
