@@ -35,18 +35,17 @@ RUN sbt app_seqexec_server_gn_test/compile
 RUN sbt app_seqexec_server_gn_test/stage 
 RUN sbt app_seqexec_server_gn_test/universal:packageZipTarball
 
-# Set the new working directory to where the tarball is located
-WORKDIR /seqexec/app/seqexec-server-gn-test/target/universal/
-
-# Extract the tarball and change directory dynamically
+# Extract the tarball and set the working directory
 RUN cd /seqexec/app/seqexec-server-gn-test/target/universal/ && \
     tar -xvf *.tgz && \
     NEW_DIR=$(ls -d */ | head -n 1 | tr -d '/') && \
-    cd "$NEW_DIR" && \
-    ln -s /usr/lib/jvm/java-17-openjdk-amd64/ jre
+    echo "export NEW_DIR=$NEW_DIR" >> /etc/environment
 
-# Change to the correct directory
-WORKDIR /seqexec/app/seqexec-server-gn-test/target/universal/
+# Set the working directory
+WORKDIR /seqexec/app/seqexec-server-gn-test/target/universal/${NEW_DIR}
+
+# Create the symlink in the current working directory
+RUN ln -s /usr/lib/jvm/java-17-openjdk-amd64/ jre
 
 # Optionally, set the start script as the entrypoint
 # ENTRYPOINT ["/start-seqexec.sh"]
