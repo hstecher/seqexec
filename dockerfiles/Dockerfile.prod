@@ -2,7 +2,7 @@
 #  Run Seqexec locally in docker
 #
 #  -- on host --
-#  docker build -t registry.gitlab.com/nsf-noirlab/gemini/rtsw/user-tools/seqexec-tester/seqexec-prod -f Dockerfile.prod .
+#  docker build -t registry.gitlab.com/nsf-noirlab/gemini/rtsw/user-tools/seqexec-tester/seqexec-prod -f Dockerfile.prod ../
 #  docker run --rm -it --name webseq-container -p 9091:9091 -p 9090:9090 registry.gitlab.com/nsf-noirlab/gemini/rtsw/user-tools/seqexec-tester/seqexec-dev bash -l
 #  
 #  -- in container --
