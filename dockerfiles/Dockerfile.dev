@@ -3,8 +3,13 @@
 #
 #  -- on host --
 #  docker build -t registry.gitlab.com/nsf-noirlab/gemini/rtsw/user-tools/seqexec-tester/seqexec-dev -f Dockerfile.dev ../
-#  docker run --rm -it --name webseq-container -p 9091:9091 -p 9090:9090 registry.gitlab.com/nsf-noirlab/gemini/rtsw/user-tools/seqexec-tester/seqexec-dev bash -l
 #  
+#  -- copy tarball to host --
+#  docker run --rm -v $(pwd)/output:/output registry.gitlab.com/nsf-noirlab/gemini/rtsw/user-tools/seqexec-tester/seqexec-dev sh -c "cp /seqexec/app/seqexec-server-gn-test/target/universal/*.tgz /output/"
+#
+#  -- run container --
+#  docker run --rm -it --name webseq-container -p 9091:9091 -p 9090:9090 registry.gitlab.com/nsf-noirlab/gemini/rtsw/user-tools/seqexec-tester/seqexec-dev bash -l
+#
 #  -- in container --
 #  cd /seqexec/app/seqexec-server-gn-test/target/universal/app_seqexec_server_gn_test-<date...>/
 #  vi conf/app.conf [customize config]
@@ -35,12 +40,13 @@ RUN sbt app_seqexec_server_gn_test/compile
 RUN sbt app_seqexec_server_gn_test/stage 
 RUN sbt app_seqexec_server_gn_test/universal:packageZipTarball
 
-# Extract the tarball, set the working directory, and create the symlink
+# Extract the tarball, include the JRE, and set the working directory
 RUN cd /seqexec/app/seqexec-server-gn-test/target/universal/ && \
     tar -xvf *.tgz && \
     TAR_DIR=$(ls -d app_seqexec_server_gn_test-*/ | head -n 1 | tr -d '/') && \
     cd "$TAR_DIR" && \
-    ln -s /usr/lib/jvm/java-17-openjdk-amd64/ jre && \
+    cp -r /usr/lib/jvm/java-17-openjdk-amd64/ jre && \
+    tar -cvzf ../"$TAR_DIR".tgz . && \
     echo "export SEQEXEC_DIR=/seqexec/app/seqexec-server-gn-test/target/universal/$TAR_DIR" >> /etc/environment
 
 # Set the working directory for subsequent commands
