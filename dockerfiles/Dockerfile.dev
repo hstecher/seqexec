@@ -47,7 +47,11 @@ RUN cd /seqexec/app/seqexec-server-gn-test/target/universal/ && \
     mkdir "$TAR_DIR" && \
     mv * "$TAR_DIR"/ || true && \
     cd "$TAR_DIR" && \
-    cp -r /usr/lib/jvm/java-17-openjdk-amd64/ jre && \
+    apt-get update && \
+    apt-get install -y openjdk-8-jdk && \
+    cp -r /usr/lib/jvm/java-8-openjdk-amd64/ jre-1.8 && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/* && \
     cd .. && \
     tar -cvzf "$TAR_DIR".tgz "$TAR_DIR" && \
     echo "export SEQEXEC_DIR=/seqexec/app/seqexec-server-gn-test/target/universal/$TAR_DIR" >> /etc/environment
