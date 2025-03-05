@@ -334,7 +334,7 @@ object GnirsControllerEpics extends GnirsEncoders {
           L.debug(s"GNIRS configuration: ${config.show}") *>
           warnOnArray *>
           setDCParams(config.dc) *>
-//          setCCParams(config.cc) *>
+          setCCParams(config.cc) *>
           L.debug("Completed GNIRS configuration")
 
       override def observe(fileId: ImageFileId, expTime: Time): F[ObserveCommandResult] =
