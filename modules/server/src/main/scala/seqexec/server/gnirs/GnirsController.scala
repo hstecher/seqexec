@@ -164,7 +164,7 @@ object GnirsController {
     val cExpConst1 = 0.023850195
     val cExpConst2 = 0.214065865
     
-    val totalTime = cfg.exposureTime + (cExpConst1 + cExpConst2 * num_adc) * num_fowlers
+    val totalTime = cfg.exposureTime + ((cExpConst1 + cExpConst2 * num_adc) * num_fowlers).seconds
     (cfg.coadds * totalTime.max(0.seconds)).pure[F]
   }
 }
