@@ -154,13 +154,17 @@ object GnirsController {
   implicit val cfgShow: Show[GnirsConfig] = Show.fromToString
 
   def calcTotalExposureTime[F[_]: Applicative](cfg: GnirsController.DCConfig): F[Time] = {
-    val readOutTime = cfg.readMode match {
-      case LegacyReadMode.VERY_BRIGHT => 0.0 //0.19
-      case LegacyReadMode.BRIGHT      => 0.4 //0.69
-      case LegacyReadMode.FAINT       => 8 //11.14
-      case LegacyReadMode.VERY_FAINT  => 16 //22.31
+    val (num_fowlers, num_adc) = cfg.readMode match {
+      case LegacyReadMode.VERY_BRIGHT => (1, 1)
+      case LegacyReadMode.BRIGHT      => (1, 16)
+      case LegacyReadMode.FAINT       => (16, 16)
+      case LegacyReadMode.VERY_FAINT  => (32, 16)
     }
 
-    (cfg.coadds * (cfg.exposureTime + readOutTime.seconds)).pure[F]
+    val cExpConst1 = 0.023850195
+    val cExpConst2 = 0.214065865
+    
+    val totalTime = cfg.exposureTime + (cExpConst1 + cExpConst2 * num_adc) * num_fowlers
+    (cfg.coadds * totalTime.max(0.seconds)).pure[F]
   }
 }
