@@ -28,6 +28,22 @@ final class ODBSequencesLoader[F[_]: Async](
     Event.modifyState[F, EngineState[F], SeqEvent](
       { st: EngineState[F] =>
         if (execEngine.canUnload(seqId)(st)) {
+          // Get the sequence before we remove it
+          val seq = st.sequences.get(seqId)
+          
+          // If it's an IGRINS2 sequence, clean up the data label cache
+          seq.foreach { s =>
+            if (s.seqGen.instrument === Instrument.Igrins2) {
+              import cats.effect.unsafe.implicits.global
+              seqexec.server.igrins2.Igrins2SequenceLoader
+                .cleanupLabels[F](seqId)
+                .handleErrorWith(e => 
+                  Logger[F].error(e)(s"Error cleaning up data labels for IGRINS2 sequence $seqId")
+                )
+                .unsafeRunAsync { case _ => () }
+            }
+          }
+          
           (EngineState.sequences[F].modify(ss => ss - seqId) >>>
             EngineState.selected.modify(ss =>
               ss.toList.filter { case (_, x) => x =!= seqId }.toMap
@@ -67,10 +83,28 @@ final class ODBSequencesLoader[F[_]: Async](
     t.map {
       case (UnrecognizedInstrument(_) :: _, None) =>
         Nil
-      case (err :: _, None)                       =>
-        val explanation = explain(err)
-        List(Event.logDebugMsgF[F, EngineState[F], SeqEvent](explanation))
+      case (errs, None)                           =>
+        errs.map(e => Event.logDebugMsgF[F, EngineState[F], SeqEvent](explain(e)))
       case (errs, Some(seq))                      =>
+        // For IGRINS2 sequences, pre-request data labels
+        if (seq.instrument === Instrument.Igrins2) {
+          // Create a temporary Igrins2 instance just for pre-requesting
+          val tempIgrins2 = translator
+            .asInstanceOf[SeqTranslate.SeqTranslateImpl[F]] // Safe because that's the only implementation
+            .instrumentSystem(seq.instrument)
+            .asInstanceOf[Option[Igrins2[F]]]
+          
+          tempIgrins2.foreach { igrins2 =>
+            import cats.effect.unsafe.implicits.global
+            seqexec.server.igrins2.Igrins2SequenceLoader
+              .preRequestLabels(seqId, seq, igrins2)
+              .handleErrorWith(e => 
+                Logger[F].error(e)(s"Error pre-requesting data labels for IGRINS2 sequence $seqId")
+              )
+              .unsafeRunAsync { case _ => () }
+          }
+        }
+        
         loadSequenceEvent(seq).pure[F] :: errs.map(e =>
           Event.logDebugMsgF[F, EngineState[F], SeqEvent](explain(e))
         )

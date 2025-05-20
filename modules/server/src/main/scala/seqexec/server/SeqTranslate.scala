@@ -115,6 +115,24 @@ object SeqTranslate {
 
     private val overriddenSystems = new OverriddenSystems[F](systemss)
 
+    // Helper method to get an instrument system for a specific instrument
+    def instrumentSystem(instrument: Instrument): Option[InstrumentSystem[F]] = {
+      val overrides = SystemOverrides.AllEnabled
+      instrument match {
+        case Instrument.F2      => Some(Flamingos2(overriddenSystems.flamingos2(overrides), overriddenSystems.dhs(overrides)))
+        case Instrument.GmosS   => Some(GmosSouth(overriddenSystems.gmosSouth(overrides), overriddenSystems.dhs(overrides), gmosNsCmd))
+        case Instrument.GmosN   => Some(GmosNorth(overriddenSystems.gmosNorth(overrides), overriddenSystems.dhs(overrides), gmosNsCmd))
+        case Instrument.Gnirs   => Some(Gnirs(overriddenSystems.gnirs(overrides)))
+        case Instrument.Gpi     => Some(Gpi(overriddenSystems.gpi(overrides)))
+        case Instrument.Ghost   => Some(Ghost(overriddenSystems.ghost(overrides), conditionsRef))
+        case Instrument.Niri    => Some(Niri(overriddenSystems.niri(overrides), overriddenSystems.dhs(overrides)))
+        case Instrument.Nifs    => Some(Nifs(overriddenSystems.nifs(overrides), overriddenSystems.dhs(overrides)))
+        case Instrument.Gsaoi   => Some(Gsaoi(overriddenSystems.gsaoi(overrides), overriddenSystems.dhs(overrides)))
+        case Instrument.Igrins2 => Some(Igrins2(overriddenSystems.igrins2(overrides), overriddenSystems.dhs(overrides)))
+        case _                  => None
+      }
+    }
+
     private def step(
       obsId:      Observation.Id,
       i:          StepId,
@@ -437,7 +455,7 @@ object SeqTranslate {
         ov: SystemOverrides =>
           Gsaoi(overriddenSystems.gsaoi(ov), overriddenSystems.dhs(ov)): InstrumentSystem[F]
       case Instrument.Igrins2 =>
-        ov: SystemOverrides => Igrins2(overriddenSystems.igrins2(ov)): InstrumentSystem[F]
+        ov: SystemOverrides => Igrins2(overriddenSystems.igrins2(ov), overriddenSystems.dhs(ov)): InstrumentSystem[F]
     }
 
     def instrumentSpecs(instrument: Instrument): InstrumentSpecifics = instrument match {
