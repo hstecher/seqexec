@@ -62,9 +62,15 @@ class TcsNorth[F[_]: Sync: Logger] private (
 
   override def configure(config: CleanConfig): F[ConfigResult[F]] =
     buildTcsConfig.flatMap { cfg =>
-      subsystems.traverse_(s =>
-        Log.debug(s"Applying TCS/$s configuration/config: ${subsystemConfig(cfg, s)}")
-      ) *>
+      val aoDebug = cfg match {
+        case x: TcsNorthAoConfig =>
+          s"REL-4159 buildTcsAoConfig: aog=${x.gaos}, aoguide.tracking=${x.gds.aoguide.tracking}, aoguide.detector=${x.gds.aoguide.detector}"
+        case _                   => "REL-4159 buildTcsConfig: non-AO step"
+      }
+      Log.debug(aoDebug) *>
+        subsystems.traverse_(s =>
+          Log.debug(s"Applying TCS/$s configuration/config: ${subsystemConfig(cfg, s)}")
+        ) *>
         tcsController.applyConfig(subsystems, gaos, cfg).as(ConfigResult(this))
     }
 

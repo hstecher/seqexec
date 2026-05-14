@@ -467,8 +467,8 @@ object AltairControllerEpics {
             (L.debug("Flatting Altair DM") *> dmFlattenAction).whenA(unguidedStep).void
         )
 
-      retrieveConfig.map { currCfg =>
-        cfg match {
+      retrieveConfig.flatMap { currCfg =>
+        val result = cfg match {
           case Ngs(_, starPos)    =>
             pauseResumeNgsMode(starPos, currCfg, currentOffset, instrument)(pauseReasons,
                                                                             resumeReasons
@@ -513,6 +513,14 @@ object AltairControllerEpics {
             )
           case AltairOff          => turnOff(currCfg)
         }
+        L.debug(
+          s"REL-4159 pauseResume: cfg=$cfg, currCfg=$currCfg, " +
+            s"pauseReasons=$pauseReasons, resumeReasons=$resumeReasons, " +
+            s"forceFreeze=${result.forceFreeze}, " +
+            s"pauseTargetFilter=${result.pauseTargetFilter}, " +
+            s"guideWhilePaused=${result.guideWhilePaused}, " +
+            s"restoreOnResume=${result.restoreOnResume}"
+        ).as(result)
       }
     }
 
