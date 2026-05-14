@@ -309,9 +309,9 @@ object AltairControllerEpics {
     ).whenA(currCfg.sfoLoop === LgsSfoControl.Enable)
 
     private def ttgsOn(strap: Boolean, sfo: Boolean, currCfg: EpicsAltairConfig): F[Unit] =
-      checkStrapLoopState(currCfg).fold(ApplicativeError[F, Throwable].raiseError,
-                                        Sync[F].delay(_)
-      ) *>
+      checkStrapLoopState(currCfg)
+        .fold(ApplicativeError[F, Throwable].raiseError, Sync[F].delay(_))
+        .whenA(strap) *>
         (startStrapGate(currCfg) *> startStrapLoop(currCfg)).whenA(strap) *>
         startSfoLoop(currCfg).whenA(sfo)
 
@@ -411,7 +411,7 @@ object AltairControllerEpics {
       val alreadyThere =
         (currentCfg.sfoLoop === LgsSfoControl.Enable && sfo) && (currentCfg.strapLoop && strap)
 
-      val action = if (!alreadyThere && guidedStep)
+      val action = if (!alreadyThere && guidedStep && (strap || sfo))
         L.debug(
           s"Resuming Altair LGS(strap = $strap, sfo = $sfo) guiding because guidedStep=$guidedStep"
         ) *>
