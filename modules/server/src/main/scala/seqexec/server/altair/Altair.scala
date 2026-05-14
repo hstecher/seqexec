@@ -74,11 +74,11 @@ object Altair {
     override def isFollowing: F[Boolean] = controller.isFollowing
 
     override def hasTarget(guide: AltairConfig): Boolean = guide match {
-      case Lgs(st, sf, _) => st || sf
-      case LgsWithOi      => false
-      case LgsWithP1      => false
-      case Ngs(_, _)      => true
-      case AltairOff      => false
+      case Lgs(_, _, _) => true
+      case LgsWithOi    => false
+      case LgsWithP1    => false
+      case Ngs(_, _)    => true
+      case AltairOff    => false
     }
 
   }
