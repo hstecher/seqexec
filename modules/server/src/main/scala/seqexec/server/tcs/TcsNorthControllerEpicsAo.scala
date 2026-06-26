@@ -68,8 +68,11 @@ object TcsNorthControllerEpicsAo {
                 .withDebug(s"NodChop(${c.getNodChop} =!= ${d.getNodChop})")
             ),
           (c.follow =!= d.follow).option(
-            epicsSys.aoProbeFollowCmd
-              .setFollowState(encode(d.follow))
+            (L.debug(
+              s"REL-4159 setAltairProbe: writing aoFollow ${c.follow} -> ${d.follow} (this opens/closes the AOWFS probe)"
+            ) *>
+              epicsSys.aoProbeFollowCmd
+                .setFollowState(encode(d.follow)))
               .withDebug(s"AoFollow(${c.follow} =!= ${d.follow})")
           )
         ).flattenOption
@@ -372,13 +375,23 @@ object TcsNorthControllerEpicsAo {
       gaos:    Altair[F],
       current: EpicsTcsAoConfig,
       demand:  TcsNorthAoConfig
-    ): F[AltairPauseResume[F]] =
-      gaos.pauseResume(demand.gaos,
-                       current.base.offset,
-                       demand.inst.instrument,
-                       calcAoPauseConditions(current, demand),
-                       calcAoResumeConditions(current, demand)
-      )
+    ): F[AltairPauseResume[F]] = {
+      val pauseConds  = calcAoPauseConditions(current, demand)
+      val resumeConds = calcAoResumeConditions(current, demand)
+      L.debug(
+        s"REL-4159 pauseResumeGaos: gaos=${demand.gaos}, " +
+          s"aoguide.isActive=${demand.gds.aoguide.isActive} " +
+          s"(follow=${demand.gds.aoguide.tracking.follow}, nodChop=${demand.gds.aoguide.tracking.getNodChop}), " +
+          s"aowfs.follow(current)=${current.aowfs.follow}, " +
+          s"=> pauseConds=$pauseConds, resumeConds=$resumeConds"
+      ) *>
+        gaos.pauseResume(demand.gaos,
+                         current.base.offset,
+                         demand.inst.instrument,
+                         pauseConds,
+                         resumeConds
+        )
+    }
 
     def guideOff(
       subsystems:     NonEmptySet[Subsystem],
