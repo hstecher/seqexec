@@ -73,10 +73,16 @@ object Altair {
 
     override def isFollowing: F[Boolean] = controller.isFollowing
 
+    // In every Altair LGS mode the AOWFS runs the laser spot and must keep
+    // following its target; the tip-tilt/focus reference simply lives on a
+    // different guider (P1 for LgsWithP1, OI for LgsWithOi, STRAP/SFO for plain
+    // Lgs). Reporting false here built the AOWFS guider with
+    // ProbeTrackingConfig.Off, which froze the probe (aoFollow=Off) and made
+    // calcAoPauseConditions inject GaosGuideOff on every step. See REL-4159.
     override def hasTarget(guide: AltairConfig): Boolean = guide match {
       case Lgs(_, _, _) => true
-      case LgsWithOi    => false
-      case LgsWithP1    => false
+      case LgsWithOi    => true
+      case LgsWithP1    => true
       case Ngs(_, _)    => true
       case AltairOff    => false
     }
