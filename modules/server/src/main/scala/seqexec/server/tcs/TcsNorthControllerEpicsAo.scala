@@ -22,6 +22,8 @@ import seqexec.server.EpicsCodex.encode
 import seqexec.server.SeqexecFailure
 import seqexec.server.altair.Altair
 import seqexec.server.altair.AltairController.AltairConfig
+import seqexec.server.altair.AltairController.LgsWithOi
+import seqexec.server.altair.AltairController.LgsWithP1
 import seqexec.server.tcs.Gaos._
 import seqexec.server.tcs.TcsController._
 import seqexec.server.tcs.TcsNorthController.TcsNorthAoConfig
@@ -51,6 +53,42 @@ object TcsNorthControllerEpicsAo {
     private val commonController   = TcsControllerEpicsCommon[F](epicsSys)
     private val trace              =
       Option(System.getProperty("seqexec.server.tcs.trace")).flatMap(_.toBooleanOption).isDefined
+
+    // Same probe control as PWFS1 but with no nod/chop command. In LgsWithP1 /
+    // LgsWithOi the TCS rejects any attempt to set nod/chop on P1 ("Can not set
+    // nod/chop in P1+LGS mode"), so we must not send it. PWFS1 tracking still
+    // demands On(Normal), so the probe keeps following and M1/M2 sourcing and
+    // the P1On/P1Off pause-resume conditions are unaffected; only the EPICS
+    // nod/chop write is skipped. See REL-4159.
+    private val pwfs1NoNodChopGuiderControl: GuideControl[F] =
+      GuideControl(Subsystem.PWFS1,
+                   epicsSys.pwfs1Park,
+                   nodChopGuideCmd = none,
+                   epicsSys.pwfs1ProbeFollowCmd
+      )
+
+    // PWFS1 probe setter for the AO controller: suppresses the nod/chop write in
+    // the LGS relay modes (LgsWithP1 / LgsWithOi), otherwise identical to the
+    // common controller's setPwfs1Probe.
+    private def setPwfs1ProbeAo(gaos: AltairConfig)(
+      subsystems: NonEmptySet[Subsystem],
+      c:          ProbeTrackingConfig,
+      d:          ProbeTrackingConfig
+    ): Option[WithDebug[EpicsTcsAoConfig => F[EpicsTcsAoConfig]]] =
+      gaos match {
+        case LgsWithP1 | LgsWithOi =>
+          commonController
+            .setGuideProbe(
+              pwfs1NoNodChopGuiderControl,
+              EpicsTcsAoConfig.base
+                .andThen(BaseEpicsTcsConfig.pwfs1)
+                .andThen(GuiderConfig.tracking)
+                .replace
+            )(subsystems, c, d)
+            .map(_.mapDebug(dbg => s"PWFS1: $dbg"))
+        case _                     =>
+          commonController.setPwfs1Probe(EpicsTcsAoConfig.base)(subsystems, c, d)
+      }
 
     private def setAltairProbe(
       subsystems: NonEmptySet[Subsystem],
@@ -98,9 +136,9 @@ object TcsNorthControllerEpicsAo {
         demand:  TcsNorthAoConfig
       ): List[WithDebug[EpicsTcsAoConfig => F[EpicsTcsAoConfig]]] =
         List(
-          commonController.setPwfs1Probe(EpicsTcsAoConfig.base)(subsystems,
-                                                                current.base.pwfs1.tracking,
-                                                                demand.gds.pwfs1.tracking
+          setPwfs1ProbeAo(demand.gaos)(subsystems,
+                                       current.base.pwfs1.tracking,
+                                       demand.gds.pwfs1.tracking
           ),
           setAltairProbe(subsystems, current.aowfs, demand.gds.aoguide.tracking),
           commonController.setOiwfsProbe(EpicsTcsAoConfig.base)(subsystems,
