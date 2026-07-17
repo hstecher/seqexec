@@ -90,14 +90,20 @@ object TcsNorthControllerEpicsAo {
           commonController.setPwfs1Probe(EpicsTcsAoConfig.base)(subsystems, c, d)
       }
 
-    private def setAltairProbe(
+    private def setAltairProbe(gaos: AltairConfig)(
       subsystems: NonEmptySet[Subsystem],
       c:          ProbeTrackingConfig,
       d:          ProbeTrackingConfig
     ): Option[WithDebug[EpicsTcsAoConfig => F[EpicsTcsAoConfig]]] =
       if (subsystems.contains(Subsystem.Gaos)) {
-        val actionList = List(
-          (c.getNodChop =!= d.getNodChop)
+        // The AOWFS nod/chop is written through the PWFS2 probe guide channel.
+        // In LgsWithP1 / LgsWithOi the TCS rejects setting nod/chop in P1+LGS
+        // mode ("Can not set nod/chop in P1+LGS mode"), so skip that write while
+        // still driving aoFollow. Tracking is unchanged, so guiding is
+        // unaffected; only the EPICS nod/chop write is skipped. See REL-4159.
+        val suppressNodChop = gaos === LgsWithP1 || gaos === LgsWithOi
+        val actionList      = List(
+          (!suppressNodChop && c.getNodChop =!= d.getNodChop)
             .option(
               commonController
                 .setNodChopProbeTrackingConfig(epicsSys.pwfs2ProbeGuideCmd)(
@@ -140,7 +146,7 @@ object TcsNorthControllerEpicsAo {
                                        current.base.pwfs1.tracking,
                                        demand.gds.pwfs1.tracking
           ),
-          setAltairProbe(subsystems, current.aowfs, demand.gds.aoguide.tracking),
+          setAltairProbe(demand.gaos)(subsystems, current.aowfs, demand.gds.aoguide.tracking),
           commonController.setOiwfsProbe(EpicsTcsAoConfig.base)(subsystems,
                                                                 current.base.oiwfs.tracking,
                                                                 demand.gds.oiwfs.tracking,
