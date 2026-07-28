@@ -73,16 +73,20 @@ object Altair {
 
     override def isFollowing: F[Boolean] = controller.isFollowing
 
-    // In every Altair LGS mode the AOWFS runs the laser spot and must keep
-    // following its target; the tip-tilt/focus reference simply lives on a
-    // different guider (P1 for LgsWithP1, OI for LgsWithOi, STRAP/SFO for plain
-    // Lgs). Reporting false here built the AOWFS guider with
-    // ProbeTrackingConfig.Off, which froze the probe (aoFollow=Off) and made
-    // calcAoPauseConditions inject GaosGuideOff on every step. See REL-4159.
+    // In plain Lgs the AOWFS carries the NGS used for tip-tilt/focus, so it must
+    // keep following regardless of whether STRAP/SFO happen to be closed right
+    // now; returning `st || sf` there froze the probe (aoFollow=Off) and made
+    // calcAoPauseConditions inject GaosGuideOff on every step.
+    //
+    // LgsWithP1 / LgsWithOi are different: the tip-tilt reference lives on P1 or
+    // the OIWFS and the AOWFS/FSM must NOT be put into follow. Demanding
+    // ProbeTrackingConfig.On there drives the AOWFS probe on every offset and
+    // the TCS never reaches in-position ("Timeout while waiting for TCS
+    // inposition flag"). These two stay false. See REL-4159.
     override def hasTarget(guide: AltairConfig): Boolean = guide match {
       case Lgs(_, _, _) => true
-      case LgsWithOi    => true
-      case LgsWithP1    => true
+      case LgsWithOi    => false
+      case LgsWithP1    => false
       case Ngs(_, _)    => true
       case AltairOff    => false
     }
