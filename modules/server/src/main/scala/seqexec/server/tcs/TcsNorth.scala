@@ -113,14 +113,11 @@ class TcsNorth[F[_]: Sync: Logger] private (
   private def buildTcsAoConfig(gc: GuideConfig, ao: Altair[F]): TcsNorthConfig = {
     val aog = gc.gaosGuide.flatMap(_.swap.toOption).getOrElse(AltairOff)
 
-    val aoGuiderConfig = ao
-      .hasTarget(aog)
-      .fold(
-        calcGuiderConfig(config.guideWithAO),
-        GuiderConfig(ProbeTrackingConfig.Off,
-                     config.guideWithAO.map(_.toGuideSensorOption).getOrElse(GuiderSensorOff)
-        )
-      )
+    // The detector demand always comes from the step; only the probe tracking can
+    // be overridden by the Altair mode (e.g. Frozen for the LGS relay modes).
+    val sequenceAoGuider = calcGuiderConfig(config.guideWithAO)
+    val aoGuiderConfig   =
+      sequenceAoGuider.copy(tracking = ao.aoProbeTracking(aog, sequenceAoGuider.tracking))
 
     AoTcsConfig[GuiderConfig @@ AoGuide, AltairConfig](
       gc.tcsGuide,

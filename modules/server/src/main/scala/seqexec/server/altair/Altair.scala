@@ -16,6 +16,7 @@ import seqexec.server.gems.GemsController.GemsConfig
 import seqexec.server.tcs.Gaos
 import seqexec.server.tcs.Gaos.{ PauseConditionSet, ResumeConditionSet }
 import seqexec.server.tcs.TcsController.FocalPlaneOffset
+import seqexec.server.tcs.TcsController.ProbeTrackingConfig
 import squants.Time
 
 trait Altair[F[_]] extends Gaos[F] {
@@ -36,8 +37,18 @@ trait Altair[F[_]] extends Gaos[F] {
 
   def isFollowing: F[Boolean]
 
-  // Are we using a NGS, either for NGS mode or LGS + NGS ?
-  def hasTarget(guide: AltairConfig): Boolean
+  /**
+   * AOWFS probe tracking demand for an Altair mode. `sequenceTracking` is what the step's
+   * guideWithAO asks for; a mode may override it.
+   *
+   * This replaces the old `hasTarget: Boolean`, which could only pick between the sequence demand
+   * and ProbeTrackingConfig.Off, and so had no way to express "keep following, don't nod/chop" --
+   * the state the LGS relay modes need. See REL-4159.
+   */
+  def aoProbeTracking(
+    guide:            AltairConfig,
+    sequenceTracking: ProbeTrackingConfig
+  ): ProbeTrackingConfig
 
 }
 
@@ -73,22 +84,29 @@ object Altair {
 
     override def isFollowing: F[Boolean] = controller.isFollowing
 
-    // In plain Lgs the AOWFS carries the NGS used for tip-tilt/focus, so it must
-    // keep following regardless of whether STRAP/SFO happen to be closed right
-    // now; returning `st || sf` there froze the probe (aoFollow=Off) and made
-    // calcAoPauseConditions inject GaosGuideOff on every step.
+    // Ngs and plain Lgs: the AOWFS carries the NGS and tracks it normally, so the
+    // step's demand stands. In particular it stands regardless of whether
+    // STRAP/SFO happen to be closed right now -- conditioning this on the loop
+    // state wrote aoFollow=Off and froze the probe (fixed and verified on-sky
+    // 2026-07-17).
     //
-    // LgsWithP1 / LgsWithOi are different: the tip-tilt reference lives on P1 or
-    // the OIWFS and the AOWFS/FSM must NOT be put into follow. Demanding
-    // ProbeTrackingConfig.On there drives the AOWFS probe on every offset and
-    // the TCS never reaches in-position ("Timeout while waiting for TCS
-    // inposition flag"). These two stay false. See REL-4159.
-    override def hasTarget(guide: AltairConfig): Boolean = guide match {
-      case Lgs(_, _, _) => true
-      case LgsWithOi    => false
-      case LgsWithP1    => false
-      case Ngs(_, _)    => true
-      case AltairOff    => false
+    // LgsWithP1 / LgsWithOi are the relay modes: the tip-tilt reference lives on
+    // P1 or the OIWFS, but the AOWFS still runs the laser spot and must keep
+    // following. Its nod/chop has to be AllOff -- the TCS rejects setting
+    // nod/chop on the AOWFS in P1+LGS mode -- while follow stays on. That pair
+    // is exactly ProbeTrackingConfig.Frozen.
+    //
+    // This mirrors tcl/tk seqexec, whose beamconfig drives the AOWFS nod/chop
+    // channel to all-Off when lgsp1 or lgsoi is set (RealTcs.itcl) and never
+    // commands the AO probe out of follow.
+    override def aoProbeTracking(
+      guide:            AltairConfig,
+      sequenceTracking: ProbeTrackingConfig
+    ): ProbeTrackingConfig = guide match {
+      case Lgs(_, _, _)          => sequenceTracking
+      case Ngs(_, _)             => sequenceTracking
+      case LgsWithOi | LgsWithP1 => ProbeTrackingConfig.Frozen
+      case AltairOff             => ProbeTrackingConfig.Off
     }
 
   }

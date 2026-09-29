@@ -22,8 +22,6 @@ import seqexec.server.EpicsCodex.encode
 import seqexec.server.SeqexecFailure
 import seqexec.server.altair.Altair
 import seqexec.server.altair.AltairController.AltairConfig
-import seqexec.server.altair.AltairController.LgsWithOi
-import seqexec.server.altair.AltairController.LgsWithP1
 import seqexec.server.tcs.Gaos._
 import seqexec.server.tcs.TcsController._
 import seqexec.server.tcs.TcsNorthController.TcsNorthAoConfig
@@ -54,56 +52,30 @@ object TcsNorthControllerEpicsAo {
     private val trace              =
       Option(System.getProperty("seqexec.server.tcs.trace")).flatMap(_.toBooleanOption).isDefined
 
-    // Same probe control as PWFS1 but with no nod/chop command. In LgsWithP1 /
-    // LgsWithOi the TCS rejects any attempt to set nod/chop on P1 ("Can not set
-    // nod/chop in P1+LGS mode"), so we must not send it. PWFS1 tracking still
-    // demands On(Normal), so the probe keeps following and M1/M2 sourcing and
-    // the P1On/P1Off pause-resume conditions are unaffected; only the EPICS
-    // nod/chop write is skipped. See REL-4159.
-    private val pwfs1NoNodChopGuiderControl: GuideControl[F] =
-      GuideControl(Subsystem.PWFS1,
-                   epicsSys.pwfs1Park,
-                   nodChopGuideCmd = none,
-                   epicsSys.pwfs1ProbeFollowCmd
-      )
+    // "Is the AO loop guiding?" is a question about probe follow, not about
+    // nod/chop. GuiderConfig.isActive requires both, which is wrong for the LGS
+    // relay modes: there the loop guides on the laser spot with nod/chop
+    // deliberately AllOff (ProbeTrackingConfig.Frozen), and isActive would
+    // report it inactive -- injecting GaosGuideOff on every step, so the
+    // corrections get torn down between offsets and GaosGuideOn never appears on
+    // resume. tcl/tk seqexec keeps the AO loop closed across offsets in lgsp1 /
+    // lgsoi for exactly this reason (RealTcs.itcl sets aoduringmove
+    // unconditionally there: the laser moves with the telescope). See REL-4159.
+    private def aoGuideActive(g: GuiderConfig): Boolean =
+      g.tracking.follow === FollowOption.FollowOn && g.detector === GuiderSensorOn
 
-    // PWFS1 probe setter for the AO controller: suppresses the nod/chop write in
-    // the LGS relay modes (LgsWithP1 / LgsWithOi), otherwise identical to the
-    // common controller's setPwfs1Probe.
-    private def setPwfs1ProbeAo(gaos: AltairConfig)(
-      subsystems: NonEmptySet[Subsystem],
-      c:          ProbeTrackingConfig,
-      d:          ProbeTrackingConfig
-    ): Option[WithDebug[EpicsTcsAoConfig => F[EpicsTcsAoConfig]]] =
-      gaos match {
-        case LgsWithP1 | LgsWithOi =>
-          commonController
-            .setGuideProbe(
-              pwfs1NoNodChopGuiderControl,
-              EpicsTcsAoConfig.base
-                .andThen(BaseEpicsTcsConfig.pwfs1)
-                .andThen(GuiderConfig.tracking)
-                .replace
-            )(subsystems, c, d)
-            .map(_.mapDebug(dbg => s"PWFS1: $dbg"))
-        case _                     =>
-          commonController.setPwfs1Probe(EpicsTcsAoConfig.base)(subsystems, c, d)
-      }
-
-    private def setAltairProbe(gaos: AltairConfig)(
+    private def setAltairProbe(
       subsystems: NonEmptySet[Subsystem],
       c:          ProbeTrackingConfig,
       d:          ProbeTrackingConfig
     ): Option[WithDebug[EpicsTcsAoConfig => F[EpicsTcsAoConfig]]] =
       if (subsystems.contains(Subsystem.Gaos)) {
         // The AOWFS nod/chop is written through the PWFS2 probe guide channel.
-        // In LgsWithP1 / LgsWithOi the TCS rejects setting nod/chop in P1+LGS
-        // mode ("Can not set nod/chop in P1+LGS mode"), so skip that write while
-        // still driving aoFollow. Tracking is unchanged, so guiding is
-        // unaffected; only the EPICS nod/chop write is skipped. See REL-4159.
-        val suppressNodChop = gaos === LgsWithP1 || gaos === LgsWithOi
-        val actionList      = List(
-          (!suppressNodChop && c.getNodChop =!= d.getNodChop)
+        // The demand carries whatever the Altair mode requires -- AllOff for the
+        // LGS relay modes, where the TCS rejects a nod/chop set -- so the plain
+        // difference check below is enough; nothing needs suppressing here.
+        val actionList = List(
+          (c.getNodChop =!= d.getNodChop)
             .option(
               commonController
                 .setNodChopProbeTrackingConfig(epicsSys.pwfs2ProbeGuideCmd)(
@@ -142,11 +114,11 @@ object TcsNorthControllerEpicsAo {
         demand:  TcsNorthAoConfig
       ): List[WithDebug[EpicsTcsAoConfig => F[EpicsTcsAoConfig]]] =
         List(
-          setPwfs1ProbeAo(demand.gaos)(subsystems,
-                                       current.base.pwfs1.tracking,
-                                       demand.gds.pwfs1.tracking
+          commonController.setPwfs1Probe(EpicsTcsAoConfig.base)(subsystems,
+                                                                current.base.pwfs1.tracking,
+                                                                demand.gds.pwfs1.tracking
           ),
-          setAltairProbe(demand.gaos)(subsystems, current.aowfs, demand.gds.aoguide.tracking),
+          setAltairProbe(subsystems, current.aowfs, demand.gds.aoguide.tracking),
           commonController.setOiwfsProbe(EpicsTcsAoConfig.base)(subsystems,
                                                                 current.base.oiwfs.tracking,
                                                                 demand.gds.oiwfs.tracking,
@@ -396,7 +368,7 @@ object TcsNorthControllerEpicsAo {
           },
           (!demand.gds.oiwfs.isActive).option(PauseCondition.OiOff),
           (!demand.gds.pwfs1.isActive).option(PauseCondition.P1Off),
-          (!demand.gds.aoguide.isActive).option(PauseCondition.GaosGuideOff)
+          (!aoGuideActive(demand.gds.aoguide)).option(PauseCondition.GaosGuideOff)
         ).flattenOption
       )
 
@@ -411,7 +383,7 @@ object TcsNorthControllerEpicsAo {
           ),
           demand.gds.oiwfs.isActive.option(ResumeCondition.OiOn),
           demand.gds.pwfs1.isActive.option(ResumeCondition.P1On),
-          demand.gds.aoguide.isActive.option(ResumeCondition.GaosGuideOn)
+          aoGuideActive(demand.gds.aoguide).option(ResumeCondition.GaosGuideOn)
         ).flattenOption
       )
 
@@ -424,8 +396,10 @@ object TcsNorthControllerEpicsAo {
       val resumeConds = calcAoResumeConditions(current, demand)
       L.debug(
         s"REL-4159 pauseResumeGaos: gaos=${demand.gaos}, " +
-          s"aoguide.isActive=${demand.gds.aoguide.isActive} " +
-          s"(follow=${demand.gds.aoguide.tracking.follow}, nodChop=${demand.gds.aoguide.tracking.getNodChop}), " +
+          s"aoGuideActive=${aoGuideActive(demand.gds.aoguide)} " +
+          s"(follow=${demand.gds.aoguide.tracking.follow}, " +
+          s"nodChop=${demand.gds.aoguide.tracking.getNodChop}, " +
+          s"detector=${demand.gds.aoguide.detector}), " +
           s"aowfs.follow(current)=${current.aowfs.follow}, " +
           s"=> pauseConds=$pauseConds, resumeConds=$resumeConds"
       ) *>
