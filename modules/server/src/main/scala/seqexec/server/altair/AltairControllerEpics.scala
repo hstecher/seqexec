@@ -408,16 +408,8 @@ object AltairControllerEpics {
       reasons:    ResumeConditionSet
     ): ResumeReturn[F] = {
       val guidedStep   = reasons.contains(ResumeCondition.GaosGuideOn)
-      // Every requested loop is already running. The previous form,
-      // (sfoOn && sfo) && (strapOn && strap), could only be true when BOTH
-      // loops were requested, so in Lgs(strap = true, sfo = false) every guided
-      // step "resumed" a STRAP loop that was never paused: setCorrectionsOn +
-      // the STRAP status checks on every step. On-sky 2026-07-15 that failed
-      // with "Cannot start Altair STRAP loop, RT Control status is bad" while
-      // the STRAP loop was in fact running. tcl/tk only restarts the TTGS loops
-      // after it has turned them off. See REL-4159.
       val alreadyThere =
-        (!sfo || currentCfg.sfoLoop === LgsSfoControl.Enable) && (!strap || currentCfg.strapLoop)
+        (currentCfg.sfoLoop === LgsSfoControl.Enable && sfo) && (currentCfg.strapLoop && strap)
 
       val action = if (!alreadyThere && guidedStep && (strap || sfo))
         L.debug(
