@@ -22,8 +22,8 @@ import seqexec.model.enum.ApplyCommandResult
 import seqexec.server.SeqexecFailure
 import seqexec.server.altair.AltairController._
 import seqexec.server.tcs.FOCAL_PLANE_SCALE
-import seqexec.server.tcs.Gaos.PauseCondition.{ GaosGuideOff, OiOff, P1Off }
-import seqexec.server.tcs.Gaos.ResumeCondition.{ GaosGuideOn, OiOn, P1On }
+import seqexec.server.tcs.Gaos.PauseCondition.GaosGuideOff
+import seqexec.server.tcs.Gaos.ResumeCondition.GaosGuideOn
 import seqexec.server.tcs.Gaos._
 import seqexec.server.tcs.TcsController.FocalPlaneOffset
 import seqexec.server.tcs.TcsEpics
@@ -485,37 +485,32 @@ object AltairControllerEpics {
             pauseResumeLgsMode(str, sfo, pos, currCfg, currentOffset, instrument)(pauseReasons,
                                                                                   resumeReasons
             )
-          case LgsWithP1          =>
+          // LGS relay modes: replicate tcl/tk seqexec (RealTcs.itcl), which ran
+          // these modes correctly.
+          // - The Altair loop is never opened for offsets or because the
+          //   tip-tilt guider (P1 / OI) goes off: aoduringmove is set
+          //   unconditionally ("the laser moves with the telescope"). It is
+          //   opened only when the step's AOWFS guide is park/freeze
+          //   (GaosGuideOff, RealTcs.itcl:1351/1355).
+          // - It is closed again on a step that guides with the AOWFS if it is
+          //   currently open.
+          // - While moving, M1 is left alone; M2 is gated by the tip-tilt
+          //   guider in TcsNorthControllerEpicsAo.calcGuideOff.
+          // - After the move, M1 and the GAOS M2 source follow the AOWFS guide
+          //   state, as tcl/tk telconfig does (m1/m2 guide on if the AOWFS is
+          //   on). The P1 / OI M2 source is restored by guideOn from the step's
+          //   own P1 / OI demand.
+          // See REL-4159.
+          case LgsWithP1 | LgsWithOi =>
+            val aoGuided = resumeReasons.contains(GaosGuideOn)
             AltairPauseResume(
-              guideOff(currCfg.aoLoop && pauseReasons.fixed.contains(P1Off)),
-              GuideCapabilities(!pauseReasons.fixed.contains(P1Off),
-                                canGuideM1 = !pauseReasons.fixed.contains(P1Off)
-              ),
+              guideOff(false),
+              GuideCapabilities(canGuideM2 = !unguidedStep, canGuideM1 = true),
               pauseTargetFilter = false,
-              (resumeReasons.contains(P1On) && resumeReasons.contains(
-                GaosGuideOn
-              ) && (!currCfg.aoLoop || pauseReasons
-                .contains(P1Off))).option(setCorrectionsOn.void),
-              GuideCapabilities(resumeReasons.fixed.contains(P1On),
-                                canGuideM1 = resumeReasons.fixed.contains(P1On)
+              (aoGuided && !currCfg.aoLoop).option(
+                L.debug("Closing Altair loop for LGS relay mode") *> setCorrectionsOn.void
               ),
-              none,
-              forceFreeze = false
-            )
-          case LgsWithOi          =>
-            AltairPauseResume(
-              guideOff(currCfg.aoLoop && pauseReasons.fixed.contains(OiOff)),
-              GuideCapabilities(!pauseReasons.fixed.contains(OiOff),
-                                canGuideM1 = !pauseReasons.fixed.contains(OiOff)
-              ),
-              pauseTargetFilter = false,
-              (resumeReasons.contains(OiOn) && resumeReasons.contains(
-                GaosGuideOn
-              ) && (!currCfg.aoLoop || pauseReasons
-                .contains(OiOff))).option(setCorrectionsOn.void),
-              GuideCapabilities(resumeReasons.fixed.contains(OiOn),
-                                canGuideM1 = resumeReasons.fixed.contains(OiOn)
-              ),
+              GuideCapabilities(canGuideM2 = aoGuided, canGuideM1 = aoGuided),
               none,
               forceFreeze = false
             )

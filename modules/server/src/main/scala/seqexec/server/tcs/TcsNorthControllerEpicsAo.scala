@@ -90,8 +90,16 @@ object TcsNorthControllerEpicsAo {
                 )
                 .withDebug(s"NodChop(${c.getNodChop} =!= ${d.getNodChop})")
             ),
-          // In the relay modes AO follow belongs to the TCC: seqexec never
-          // writes it, in either direction, as tcl/tk never did.
+          // HARDWARE SAFETY -- do not remove. In LGS+P1 / LGS+OI the AOWFS has
+          // no target of its own (tip-tilt comes from P1 / OI; two guiders make
+          // no sense). Commanding aoFollow On there makes the Altair stage
+          // follow a target that does not exist; on-sky 2026-07-28 (build with
+          // 809587ce9 + 53cb1daf1) it was driven into its limit and the
+          // hardware was damaged. cb4a017ae removed that demand and the next
+          // test (2026-08-12) did not reproduce it. So in these modes seqexec
+          // never writes aoFollow, in either direction; tcl/tk seqexec never
+          // did either. This is the only aoFollow write in the code base.
+          // See REL-4159.
           (!isRelayMode(gaos) && c.follow =!= d.follow).option(
             (L.debug(
               s"REL-4159 setAltairProbe: writing aoFollow ${c.follow} -> ${d.follow} (this opens/closes the AOWFS probe)"
@@ -261,6 +269,22 @@ object TcsNorthControllerEpicsAo {
       )
     ).flattenOption
 
+    // Can this guider keep guiding through the move: active before and after,
+    // and the move is within its offset threshold.
+    private def guiderKeepsGuiding(
+      guiderCurrent:   GuiderConfig,
+      guiderDemand:    GuiderConfig,
+      distanceSquared: Option[Area],
+      threshold:       Option[Length]
+    ): Boolean = {
+      val canGuideWhileOffseting = (distanceSquared, threshold) match {
+        case (None, _)           => true
+        case (Some(_), None)     => false
+        case (Some(d2), Some(t)) => d2 < t * t
+      }
+      canGuideWhileOffseting && guiderCurrent.isActive && guiderDemand.isActive
+    }
+
     private def calcGuideOffCapabilities(m2Name: TipTiltSource, m1Name: M1Source)(
       tcsGuideCurrent: TelescopeGuideConfig,
       guiderCurrent:   GuiderConfig,
@@ -269,18 +293,13 @@ object TcsNorthControllerEpicsAo {
       distanceSquared: Option[Area],
       threshold:       Option[Length]
     ): GuideCapabilities = {
-      val canGuideWhileOffseting = (distanceSquared, threshold) match {
-        case (None, _)           => true
-        case (Some(_), None)     => false
-        case (Some(d2), Some(t)) => d2 < t * t
-      }
-      val guiderActive           = guiderCurrent.isActive && guiderDemand.isActive
+      val canGuide = guiderKeepsGuiding(guiderCurrent, guiderDemand, distanceSquared, threshold)
 
       GuideCapabilities(
-        canGuideWhileOffseting && guiderActive && tcsGuideCurrent.m2Guide.uses(
+        canGuide && tcsGuideCurrent.m2Guide.uses(
           m2Name
         ) && tcsGuideDemand.m2Guide.uses(m2Name),
-        canGuideWhileOffseting && guiderActive && tcsGuideCurrent.m1Guide.uses(
+        canGuide && tcsGuideCurrent.m1Guide.uses(
           m1Name
         ) && tcsGuideDemand.m1Guide.uses(m1Name)
       )
@@ -313,14 +332,36 @@ object TcsNorthControllerEpicsAo {
         distanceSquared,
         demand.inst.oiOffsetGuideThreshold
       )
+      // LGS relay modes, as tcl/tk seqexec does in RealTcs.itcl move: if the
+      // tip-tilt guider (P1 / OI) cannot keep guiding through this move, all M2
+      // guiding goes off (GAOS included), mount guiding with it, and the
+      // tip-tilt guider stops integrating; M1 is left alone. guideOn restores
+      // them afterwards. See REL-4159.
+      val relayTtKeepsGuiding = demand.gaos match {
+        case LgsWithP1 =>
+          guiderKeepsGuiding(current.base.pwfs1,
+                             demand.gds.pwfs1,
+                             distanceSquared,
+                             pwfs1OffsetThreshold.some
+          ).some
+        case LgsWithOi =>
+          guiderKeepsGuiding(current.base.oiwfs,
+                             demand.gds.oiwfs,
+                             distanceSquared,
+                             demand.inst.oiOffsetGuideThreshold
+          ).some
+        case _         => none
+      }
+      val stopTtGuider        = relayTtKeepsGuiding.contains(false)
+
       val aoWhatCanGuide = GuideCapabilities(
-        aoGuideCapabilities.canGuideM2 && current.base.telescopeGuideConfig.m2Guide
+        !stopTtGuider && aoGuideCapabilities.canGuideM2 && current.base.telescopeGuideConfig.m2Guide
           .uses(TipTiltSource.GAOS) && demand.gc.m2Guide.uses(TipTiltSource.GAOS),
         aoGuideCapabilities.canGuideM1 && current.base.telescopeGuideConfig.m1Guide
           .uses(M1Source.GAOS) && demand.gc.m1Guide.uses(M1Source.GAOS)
       )
 
-      val m1Enabled =
+      val m1Enabled = relayTtKeepsGuiding.isDefined ||
         p1WhatCanGuide.canGuideM1 || oiWhatCanGuide.canGuideM1 || aoWhatCanGuide.canGuideM1
 
       val m2config = demand.gc.m2Guide match {
@@ -345,12 +386,18 @@ object TcsNorthControllerEpicsAo {
             .pwfs1[GuiderConfig @@ AoGuide]
             .andThen(tagIso[GuiderConfig, P1Config])
             .andThen(GuiderConfig.detector)
-            .replace(calc(current.base.pwfs1.detector, demand.gds.pwfs1.detector)) >>>
+            .replace(
+              (stopTtGuider && demand.gaos === LgsWithP1)
+                .fold(GuiderSensorOff, calc(current.base.pwfs1.detector, demand.gds.pwfs1.detector))
+            ) >>>
             AoGuidersConfig
               .oiwfs[GuiderConfig @@ AoGuide]
               .andThen(tagIso[GuiderConfig, OIConfig])
               .andThen(GuiderConfig.detector)
-              .replace(calc(current.base.oiwfs.detector, demand.gds.oiwfs.detector))
+              .replace(
+                (stopTtGuider && demand.gaos === LgsWithOi)
+                  .fold(GuiderSensorOff, calc(current.base.oiwfs.detector, demand.gds.oiwfs.detector))
+              )
         ) >>> m1Enabled.fold(
         identity[AoTcsConfig[GuiderConfig @@ AoGuide, AltairConfig]](_),
         AoTcsConfig

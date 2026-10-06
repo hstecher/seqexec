@@ -709,4 +709,98 @@ class AltairControllerEpicsSpec extends munit.CatsEffectSuite {
     }
   }
 
+
+  // REL-4159: LGS relay modes must behave as tcl/tk seqexec did. The Altair loop
+  // stays closed through offsets and when P1 / OI goes off; it is opened only
+  // when the step's AOWFS guide is park/freeze, and closed again on a step
+  // guided by the AOWFS if it is open.
+  private val relayModes: List[AltairController.AltairConfig] =
+    List(AltairController.LgsWithP1, AltairController.LgsWithOi)
+
+  private def ttOff(cfg: AltairController.AltairConfig): Gaos.PauseCondition =
+    if (cfg === AltairController.LgsWithP1) Gaos.PauseCondition.P1Off
+    else Gaos.PauseCondition.OiOff
+
+  private def isAoCorrect(e: TestTcsEpics.TestTcsEvent): Boolean = e match {
+    case AoCorrectCmd(_, _) => true
+    case _                  => false
+  }
+
+  relayModes.foreach { altairCfg =>
+    test(s"$altairCfg: Altair loop stays closed through a large offset with the tip-tilt guider off") {
+      val offset = FocalPlaneOffset(tag[OffsetX](20.0.millimeters), tag[OffsetY](20.0.millimeters))
+      for {
+        ao   <- TestAltairEpics.build[IO](TestAltairEpics.defaultState.copy(aoLoop = true))
+        tcs  <- TestTcsEpics.build[IO](aoGuidedTcs)
+        c     = AltairControllerEpics(ao, tcs)
+        r    <- c.pauseResume(
+                  Gaos.PauseConditionSet.empty + Gaos.PauseCondition.OffsetMove(baseOffset, offset) +
+                    ttOff(altairCfg),
+                  Gaos.ResumeConditionSet.empty + Gaos.ResumeCondition.GaosGuideOn +
+                    Gaos.ResumeCondition.OffsetReached(offset),
+                  baseOffset,
+                  Instrument.Gnirs
+                )(altairCfg)
+        _    <- r.pause.orEmpty
+        tcs1 <- tcs.outputF
+        _    <- tcs.out.set(List.empty)
+        _    <- r.resume.orEmpty
+        tcs2 <- tcs.outputF
+      } yield {
+        assert(!tcs1.exists(isAoCorrect))
+        assert(!tcs2.exists(isAoCorrect))
+        assert(!r.forceFreeze)
+        assert(!r.pauseTargetFilter)
+        assert(r.guideWhilePaused.canGuideM1)
+        assert(r.restoreOnResume.canGuideM2)
+        assert(r.restoreOnResume.canGuideM1)
+      }
+    }
+
+    test(s"$altairCfg: Altair loop opens when the step's AOWFS guide is park/freeze") {
+      for {
+        ao   <- TestAltairEpics.build[IO](TestAltairEpics.defaultState.copy(aoLoop = true))
+        tcs  <- TestTcsEpics.build[IO](aoGuidedTcs)
+        c     = AltairControllerEpics(ao, tcs)
+        r    <- c.pauseResume(
+                  Gaos.PauseConditionSet.empty + Gaos.PauseCondition.GaosGuideOff,
+                  Gaos.ResumeConditionSet.empty,
+                  baseOffset,
+                  Instrument.Gnirs
+                )(altairCfg)
+        _    <- r.pause.orEmpty
+        tcs1 <- tcs.outputF
+        _    <- tcs.out.set(List.empty)
+        _    <- r.resume.orEmpty
+        tcs2 <- tcs.outputF
+      } yield {
+        assert(tcs1.contains(AoCorrectCmd("OFF", 0)))
+        assert(!tcs2.exists(isAoCorrect))
+        assert(!r.restoreOnResume.canGuideM2)
+        assert(!r.restoreOnResume.canGuideM1)
+      }
+    }
+
+    test(s"$altairCfg: Altair loop is closed on an AOWFS-guided step if it is open") {
+      for {
+        ao   <- TestAltairEpics.build[IO](TestAltairEpics.defaultState.copy(aoLoop = false))
+        tcs  <- TestTcsEpics.build[IO](aoGuidedTcs)
+        c     = AltairControllerEpics(ao, tcs)
+        r    <- c.pauseResume(
+                  Gaos.PauseConditionSet.empty,
+                  Gaos.ResumeConditionSet.empty + Gaos.ResumeCondition.GaosGuideOn,
+                  baseOffset,
+                  Instrument.Gnirs
+                )(altairCfg)
+        _    <- r.pause.orEmpty
+        tcs1 <- tcs.outputF
+        _    <- tcs.out.set(List.empty)
+        _    <- r.resume.orEmpty
+        tcs2 <- tcs.outputF
+      } yield {
+        assert(!tcs1.exists(isAoCorrect))
+        assert(tcs2.contains(AoCorrectCmd("ON", 1)))
+      }
+    }
+  }
 }
