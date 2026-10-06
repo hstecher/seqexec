@@ -22,6 +22,8 @@ import seqexec.server.EpicsCodex.encode
 import seqexec.server.SeqexecFailure
 import seqexec.server.altair.Altair
 import seqexec.server.altair.AltairController.AltairConfig
+import seqexec.server.altair.AltairController.LgsWithOi
+import seqexec.server.altair.AltairController.LgsWithP1
 import seqexec.server.tcs.Gaos._
 import seqexec.server.tcs.TcsController._
 import seqexec.server.tcs.TcsNorthController.TcsNorthAoConfig
@@ -52,19 +54,24 @@ object TcsNorthControllerEpicsAo {
     private val trace              =
       Option(System.getProperty("seqexec.server.tcs.trace")).flatMap(_.toBooleanOption).isDefined
 
-    // "Is the AO loop guiding?" is a question about probe follow, not about
-    // nod/chop. GuiderConfig.isActive requires both, which is wrong for the LGS
-    // relay modes: there the loop guides on the laser spot with nod/chop
-    // deliberately AllOff (ProbeTrackingConfig.Frozen), and isActive would
-    // report it inactive -- injecting GaosGuideOff on every step, so the
-    // corrections get torn down between offsets and GaosGuideOn never appears on
-    // resume. tcl/tk seqexec keeps the AO loop closed across offsets in lgsp1 /
-    // lgsoi for exactly this reason (RealTcs.itcl sets aoduringmove
-    // unconditionally there: the laser moves with the telescope). See REL-4159.
-    private def aoGuideActive(g: GuiderConfig): Boolean =
-      g.tracking.follow === FollowOption.FollowOn && g.detector === GuiderSensorOn
+    private def isRelayMode(gaos: AltairConfig): Boolean = gaos match {
+      case LgsWithP1 | LgsWithOi => true
+      case _                     => false
+    }
 
-    private def setAltairProbe(
+    // Is the AO loop guiding on this step? For Ngs and plain Lgs this is the
+    // usual GuiderConfig.isActive (unchanged, verified on-sky). For the LGS
+    // relay modes isActive is always false -- the AOWFS is not following and
+    // its nod/chop is AllOff -- yet the AO loop is still guiding on the laser.
+    // Using isActive there injected GaosGuideOff on every step (corrections
+    // off + DM flattened) and GaosGuideOn never appeared on resume. tcl/tk
+    // keeps the AO loop closed across offsets in lgsp1/lgsoi (RealTcs.itcl sets
+    // aoduringmove unconditionally: the laser moves with the telescope), so
+    // here only the step's detector demand decides. See REL-4159.
+    private def aoGuideActive(gaos: AltairConfig, g: GuiderConfig): Boolean =
+      if (isRelayMode(gaos)) g.detector === GuiderSensorOn else g.isActive
+
+    private def setAltairProbe(gaos: AltairConfig)(
       subsystems: NonEmptySet[Subsystem],
       c:          ProbeTrackingConfig,
       d:          ProbeTrackingConfig
@@ -83,7 +90,9 @@ object TcsNorthControllerEpicsAo {
                 )
                 .withDebug(s"NodChop(${c.getNodChop} =!= ${d.getNodChop})")
             ),
-          (c.follow =!= d.follow).option(
+          // In the relay modes AO follow belongs to the TCC: seqexec never
+          // writes it, in either direction, as tcl/tk never did.
+          (!isRelayMode(gaos) && c.follow =!= d.follow).option(
             (L.debug(
               s"REL-4159 setAltairProbe: writing aoFollow ${c.follow} -> ${d.follow} (this opens/closes the AOWFS probe)"
             ) *>
@@ -118,7 +127,7 @@ object TcsNorthControllerEpicsAo {
                                                                 current.base.pwfs1.tracking,
                                                                 demand.gds.pwfs1.tracking
           ),
-          setAltairProbe(subsystems, current.aowfs, demand.gds.aoguide.tracking),
+          setAltairProbe(demand.gaos)(subsystems, current.aowfs, demand.gds.aoguide.tracking),
           commonController.setOiwfsProbe(EpicsTcsAoConfig.base)(subsystems,
                                                                 current.base.oiwfs.tracking,
                                                                 demand.gds.oiwfs.tracking,
@@ -368,7 +377,7 @@ object TcsNorthControllerEpicsAo {
           },
           (!demand.gds.oiwfs.isActive).option(PauseCondition.OiOff),
           (!demand.gds.pwfs1.isActive).option(PauseCondition.P1Off),
-          (!aoGuideActive(demand.gds.aoguide)).option(PauseCondition.GaosGuideOff)
+          (!aoGuideActive(demand.gaos, demand.gds.aoguide)).option(PauseCondition.GaosGuideOff)
         ).flattenOption
       )
 
@@ -383,7 +392,7 @@ object TcsNorthControllerEpicsAo {
           ),
           demand.gds.oiwfs.isActive.option(ResumeCondition.OiOn),
           demand.gds.pwfs1.isActive.option(ResumeCondition.P1On),
-          aoGuideActive(demand.gds.aoguide).option(ResumeCondition.GaosGuideOn)
+          aoGuideActive(demand.gaos, demand.gds.aoguide).option(ResumeCondition.GaosGuideOn)
         ).flattenOption
       )
 
@@ -396,7 +405,7 @@ object TcsNorthControllerEpicsAo {
       val resumeConds = calcAoResumeConditions(current, demand)
       L.debug(
         s"REL-4159 pauseResumeGaos: gaos=${demand.gaos}, " +
-          s"aoGuideActive=${aoGuideActive(demand.gds.aoguide)} " +
+          s"aoGuideActive=${aoGuideActive(demand.gaos, demand.gds.aoguide)} " +
           s"(follow=${demand.gds.aoguide.tracking.follow}, " +
           s"nodChop=${demand.gds.aoguide.tracking.getNodChop}, " +
           s"detector=${demand.gds.aoguide.detector}), " +

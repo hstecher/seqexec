@@ -91,21 +91,26 @@ object Altair {
     // 2026-07-17).
     //
     // LgsWithP1 / LgsWithOi are the relay modes: the tip-tilt reference lives on
-    // P1 or the OIWFS, but the AOWFS still runs the laser spot and must keep
-    // following. Its nod/chop has to be AllOff -- the TCS rejects setting
-    // nod/chop on the AOWFS in P1+LGS mode -- while follow stays on. That pair
-    // is exactly ProbeTrackingConfig.Frozen.
+    // P1 or the OIWFS. The AOWFS nod/chop must be AllOff (the TCS rejects
+    // nod/chop on the AOWFS in P1+LGS mode), and the TCC does not put the
+    // AOWFS/FSM into follow in these modes (confirmed on-sky 2026-07-28;
+    // demanding follow On drove the probe on every offset and the TCS never
+    // reached in-position). So the demand is Off: FollowOff + AllOff, matching
+    // the state the TCC leaves it in. setAltairProbe never writes follow in
+    // these modes, so this cannot freeze a probe the TCC has following, and
+    // the AO loop is treated as guiding from the detector demand alone (see
+    // TcsNorthControllerEpicsAo.aoGuideActive).
     //
     // This mirrors tcl/tk seqexec, whose beamconfig drives the AOWFS nod/chop
-    // channel to all-Off when lgsp1 or lgsoi is set (RealTcs.itcl) and never
-    // commands the AO probe out of follow.
+    // channel to all-Off when lgsp1 or lgsoi is set, and whose telconfig
+    // inherits AO follow from the TCC rather than deciding it (RealTcs.itcl).
     override def aoProbeTracking(
       guide:            AltairConfig,
       sequenceTracking: ProbeTrackingConfig
     ): ProbeTrackingConfig = guide match {
       case Lgs(_, _, _)          => sequenceTracking
       case Ngs(_, _)             => sequenceTracking
-      case LgsWithOi | LgsWithP1 => ProbeTrackingConfig.Frozen
+      case LgsWithOi | LgsWithP1 => ProbeTrackingConfig.Off
       case AltairOff             => ProbeTrackingConfig.Off
     }
 
